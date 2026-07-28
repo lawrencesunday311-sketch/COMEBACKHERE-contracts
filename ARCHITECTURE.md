@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the protocol-level design of the three COMEBACKHERE smart contracts, their data storage, and how they interact during a typical payment lifecycle.
+This document describes the protocol-level design of the COMEBACKHERE smart contracts, their data storage, and how they interact during a typical payment lifecycle.
 
 ## Contracts
 
@@ -9,6 +9,7 @@ This document describes the protocol-level design of the three COMEBACKHERE smar
 | **Invoice** | `contracts/invoice` | Invoice state machine and escrow lifecycle |
 | **Treasury** | `contracts/treasury` | 2-of-3 multi-sig settlement approval and token transfer |
 | **Compliance** | `contracts/compliance` | Admin-managed allow/block list for addresses |
+| **SettlementWorkflow** | `contracts/settlement-workflow` | Gates `Treasury::execute_settlement` behind `Compliance::is_allowed` |
 
 ---
 
@@ -50,7 +51,9 @@ sequenceDiagram
     Note over Invoice: status = Released
 ```
 
-> **Note:** `SettlementProposalWorkflow` and `SettlementWorkflow` are off-chain or intermediary contracts that coordinate the cross-contract calls. Treasury does **not** call Compliance directly.
+> **Note:** `SettlementProposalWorkflow` is a deliberately off-chain/intermediary role — no such contract is deployed in this repo. Deciding that an invoice has reached `Paid` and is ready for a settlement proposal is an off-chain (or admin-triggered) judgment call today, not an on-chain invariant enforced between Invoice and Treasury; `Invoice::get_invoice` and `Treasury::propose_settlement` remain independently callable, and it is the caller's responsibility to sequence them correctly. See `contracts/treasury/tests/invoice_status_settlement_proposal_integration_test.rs` for a test-only contract that exercises this exact sequencing without asserting it belongs on-chain.
+>
+> `SettlementWorkflow`, by contrast, **is** an on-chain contract: `contracts/settlement-workflow` implements the compliance gate described here, calling `Compliance::is_allowed` before `Treasury::execute_settlement` so a non-compliant merchant is rejected with a typed `TreasuryError::ComplianceCheckFailed` instead of reaching Treasury at all. Treasury itself still does **not** call Compliance directly — enforcement lives in this workflow contract, not in Treasury.
 
 ---
 
@@ -102,11 +105,11 @@ sequenceDiagram
 ## Cross-Contract Call Map
 
 ```
-SettlementProposalWorkflow
+SettlementProposalWorkflow (off-chain/intermediary role — not a deployed contract)
   ├── Invoice::get_invoice(id)              → validates status == Pending
   └── Treasury::propose_settlement(...)     → creates Settlement record
 
-SettlementWorkflow
+SettlementWorkflow (on-chain — contracts/settlement-workflow)
   ├── Compliance::is_allowed(merchant)      → compliance gate (must be true)
   └── Treasury::execute_settlement(...)     → transfers tokens to merchant
 
